@@ -1,0 +1,9 @@
+https://script.google.com/macros/s/AKfycbyG6q-YCMLN4ppMOZpa-ZRH1SvVpKshuH0eFaCgfb2CD9lqVaZ6J4MtI0Ehpe5sqgf0/exec?type=<param>
+
+<param>の部分にパラメータをつけることで特定のメールを取得します。
+
+  spss:      "SPSS使用者数月次レポート",
+  winapp:    "Windowsアプリケーション月次統計",
+  winclient: "Windowsクライアント月次統計",
+  onedrive:  "### OneDrive 月次ログインレポート"
+  

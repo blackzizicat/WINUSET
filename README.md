@@ -60,10 +60,10 @@ Excelを開いたままにするとファイル保存エラーが発生します
 ### 3. スクリプトを実行する
 
 ```bash
-docker run --rm \
-  -v "C:/Users/kshinjo/work/WINUSET/source:/source" \
-  -v "C:/Users/kshinjo/work/WINUSET/report:/report" \
-  -v "C:/Users/kshinjo/work/WINUSET/credentials:/credentials" \
+docker run --rm `
+  -v "C:/Users/kshinjo/work/WINUSET/source:/source" `
+  -v "C:/Users/kshinjo/work/WINUSET/report:/report" `
+  -v "C:/Users/kshinjo/work/WINUSET/credentials:/credentials" `
   winuset
 ```
 

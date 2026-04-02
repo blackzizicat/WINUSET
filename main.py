@@ -164,6 +164,147 @@ def fetch_winapp_data():
     return app_counts
 
 
+def trend_word(curr, prev, threshold=50, is_final=False, zero_means_none=False):
+    """増減判定ワードを返す。
+    差が threshold 以内 → 横ばい、超過 → 増加、以下 → 減少。
+    zero_means_none=True かつ curr==0 のとき → 「なし」。
+    is_final=True のとき語尾に「した/だった」を付ける。
+    """
+    if zero_means_none and (curr is None or curr == 0):
+        return 'なし'
+    if curr is None or prev is None:
+        return '不明'
+    diff = curr - prev
+    if diff > threshold:
+        return '増加した' if is_final else '増加し'
+    elif diff < -threshold:
+        return '減少した' if is_final else '減少し'
+    else:
+        return '横ばいだった' if is_final else '横ばい'
+
+
+def get_user_count_from_sheet(wb, sheet_name):
+    """月次シートから統計PC利用者数（学生+院生+教員+職員+misc+対象外）を計算する。
+    Winログインシート AC列の数式と同じ集計ロジック。
+    """
+    if sheet_name not in wb.sheetnames:
+        return None
+    ws = wb[sheet_name]
+    try:
+        student  = sum(ws.cell(row=r, column=13).value or 0 for r in [18, 19, 20, 21])
+        grad     = ws.cell(row=29, column=4).value or 0
+        faculty  = ws.cell(row=36, column=4).value or 0
+        staff    = ws.cell(row=43, column=1).value or 0
+        misc     = ws.cell(row=50, column=1).value or 0
+        excluded = ws.cell(row=53, column=1).value or 0
+        return student + grad + faculty + staff + misc + excluded
+    except Exception:
+        return None
+
+
+def update_user_count(report_dir, month):
+    """月次シートから利用者数を計算し、Winログインシートの AC列に直接書き込む。
+    AC列は本来 INDIRECT 数式で計算されるが、openpyxl では数式を評価できないため
+    数値を直接入力する運用とする。
+    """
+    excel_path = os.path.join(report_dir, '07_Windows利用統計.xlsx')
+    if not os.path.exists(excel_path):
+        print(f'[SKIP] Excel が見つかりません: 07_Windows利用統計.xlsx')
+        return
+
+    sheet_name = f'{month:02d}'
+    wb = openpyxl.load_workbook(excel_path)
+    count = get_user_count_from_sheet(wb, sheet_name)
+    if count is None:
+        print(f'  [WARN] 利用者数の計算に失敗しました（シート: {sheet_name}）')
+        return
+
+    row = month_to_fiscal_index(month)
+    ws = wb['Winログイン']
+    ws.cell(row=row, column=29).value = count  # AC列 = 列29
+    wb.save(excel_path)
+    print(f'利用者数を書き込みました: {count}名  (Winログイン!AC{row})')
+    print()
+
+
+def get_top_apps(wb, month, n=6):
+    """Winアプリシートから当月の利用回数上位 n 件のアプリ名を返す。"""
+    ws = wb['Winアプリ']
+    col = month_to_fiscal_index(month)  # 3=4月 … 14=3月（列番号と一致）
+    app_values = []
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row, values_only=True):
+        app_name = row[1]          # B列
+        if not app_name:
+            continue
+        value = row[col - 1] if len(row) >= col else None  # 0-indexed
+        if isinstance(value, (int, float)) and value > 0:
+            app_values.append((app_name, value))
+    app_values.sort(key=lambda x: x[1], reverse=True)
+    return [name for name, _ in app_values[:n]]
+
+
+def gen_report_text(report_dir, year, month):
+    """レポート文章を生成して返す。"""
+    prev_month = month - 1 if month > 1 else 12
+
+    excel_win = os.path.join(report_dir, '07_Windows利用統計.xlsx')
+    excel_od  = os.path.join(report_dir, '月次OneDriveログイン状況.xlsx')
+
+    wb_win = openpyxl.load_workbook(excel_win, data_only=True)
+    wb_od  = openpyxl.load_workbook(excel_od,  data_only=True)
+
+    # 利用者数・利用回数（前月→今月）
+    row_curr = month_to_fiscal_index(month)
+    row_prev = month_to_fiscal_index(prev_month)
+    ws_win = wb_win['Winログイン']
+    curr_user  = ws_win.cell(row=row_curr, column=29).value  # AC列
+    prev_user  = ws_win.cell(row=row_prev, column=29).value
+    curr_count = ws_win.cell(row=row_curr, column=32).value  # AF列
+    prev_count = ws_win.cell(row=row_prev, column=32).value
+
+    user_word  = trend_word(curr_user,  prev_user,  is_final=False)
+    count_word = trend_word(curr_count, prev_count, is_final=True)
+
+    def fmt_num(v):
+        """None を '-' に、数値をカンマ区切りで返す"""
+        return '-' if v is None else f'{v:,}'
+
+    # アプリ上位 6 件
+    top_apps  = get_top_apps(wb_win, month)
+    apps_text = '，'.join(top_apps)
+
+    # OneDrive ログイン状況（前月→今月）
+    od_row_curr = month_to_fiscal_index(month) - 1
+    od_row_prev = month_to_fiscal_index(prev_month) - 1
+    ws_od = wb_od['OneDriveログイン']
+    od_login_curr = ws_od.cell(row=od_row_curr, column=2).value or 0  # B=利用者層
+    od_login_prev = ws_od.cell(row=od_row_prev, column=2).value or 0
+    od_both_curr  = ws_od.cell(row=od_row_curr, column=3).value or 0  # C=中間層
+    od_both_prev  = ws_od.cell(row=od_row_prev, column=3).value or 0
+    od_never_curr = ws_od.cell(row=od_row_curr, column=4).value or 0  # D=非利用者層
+    od_never_prev = ws_od.cell(row=od_row_prev, column=4).value or 0
+
+    login_word = trend_word(od_login_curr, od_login_prev, is_final=False, zero_means_none=True)
+    both_word  = trend_word(od_both_curr,  od_both_prev,  is_final=False)
+    never_word = trend_word(od_never_curr, od_never_prev, is_final=True)
+
+    return (
+        f'{year}年{month}月 利用統計レポート\n'
+        f'渡邉さん\n'
+        f'新庄です。\n'
+        f'{month}月分の利用統計レポートを作成しましたのでご確認ください。\n'
+        f'----------\n'
+        f'・Windowsクライアント\n'
+        f'利用者数は{user_word}，利用回数は{count_word}'
+        f'（{fmt_num(prev_user)}名→{fmt_num(curr_user)}名，{fmt_num(prev_count)}回→{fmt_num(curr_count)}回）。'
+        f'主に利用されているアプリケーションは{apps_text}だった。'
+        f'教研AD配下のWindowsクライアントでのOneDriveログイン状況は，'
+        f'利用者層は{login_word}，中間層は{both_word}，非利用者層は{never_word}。\n'
+        f'----------\n'
+        f'よろしくお願いいたします。'
+    )
+
+
 def write_csv_to_sheet(ws, rows):
     """既存シートの値をクリアし、CSV の内容で上書きする（書式は保持）"""
     for row_cells in ws.iter_rows():
@@ -225,6 +366,12 @@ def main():
         wb.save(excel_path)
         print(f'  -> 完了: {len(rows)} 行を書き込みました')
         print()
+
+    # 月次シートから利用者数を計算して Winログイン!AC列に書き込む
+    update_user_count(report_dir, month)
+
+    # レポート文章を生成して出力
+    print(gen_report_text(report_dir, year, month))
 
 
 def update_winapp_sheet(report_dir, month):
